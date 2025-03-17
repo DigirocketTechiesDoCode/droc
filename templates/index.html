@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice Assistant</title>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <style>
+        body {
+            background-color: #070c15;
+            color: #ffffff;
+            font-family: 'Arial', sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            overflow: hidden;
+        }
+
+        h1 {
+            margin-bottom: 30px;
+            color: #f0f0f0;
+            font-weight: 300;
+            letter-spacing: 2px;
+        }
+
+        .button-container {
+            display: flex;
+            gap: 16px;
+            margin-bottom: 20px;
+            z-index: 10;
+            position: relative;
+        }
+
+        .control-button {
+            background-color: rgba(30, 40, 60, 0.7);
+            color: #f0f0f0;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 24px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            position: relative;
+            z-index: 2;
+            backdrop-filter: blur(5px);
+            border: 1px solid rgba(91, 194, 255, 0.2);
+        }
+
+        #start-button {
+            background-color: rgba(30, 40, 60, 0.7);
+        }
+
+        #start-button:hover {
+            background-color: rgba(40, 50, 80, 0.8);
+            box-shadow: 0 0 15px rgba(91, 194, 255, 0.5);
+        }
+
+        #stop-button {
+            background-color: rgba(30, 40, 60, 0.7);
+            display: none;
+        }
+
+        #stop-button:hover {
+            background-color: rgba(40, 50, 80, 0.8);
+            box-shadow: 0 0 15px rgba(255, 175, 70, 0.5);
+        }
+
+        #status {
+            font-size: 14px;
+            color: #a0a0a0;
+            margin-top: 10px;
+            z-index: 10;
+            position: relative;
+        }
+
+        .infinity-container {
+            position: relative;
+            width: 250px;
+            height: 120px;
+            margin-top: 40px;
+            opacity: 0.2;
+            transition: opacity 0.5s ease;
+        }
+
+        .infinity {
+            position: absolute;
+            width: 200px;
+            height: 80px;
+            margin: auto;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+        }
+
+        .infinity:before,
+        .infinity:after {
+            content: "";
+            position: absolute;
+            top: 0;
+            width: 80px;
+            height: 80px;
+            border: 4px solid transparent;
+            border-radius: 50%;
+            filter: blur(1px);
+        }
+
+        .infinity:before {
+            left: 0;
+            border-top-color: #5bc2ff;
+            box-shadow: 0 0 20px 2px rgba(91, 194, 255, 0.7);
+            animation: rotate-left 3s linear infinite;
+        }
+
+        .infinity:after {
+            right: 0;
+            border-bottom-color: #ffaf46;
+            box-shadow: 0 0 20px 2px rgba(255, 175, 70, 0.7);
+            animation: rotate-right 3s linear infinite;
+        }
+
+        @keyframes rotate-left {
+            0% {
+                transform: rotate(0deg);
+                border-top-color: #5bc2ff;
+            }
+            50% {
+                transform: rotate(180deg);
+                border-top-color: #3498db;
+            }
+            100% {
+                transform: rotate(360deg);
+                border-top-color: #5bc2ff;
+            }
+        }
+
+        @keyframes rotate-right {
+            0% {
+                transform: rotate(0deg);
+                border-bottom-color: #ffaf46;
+            }
+            50% {
+                transform: rotate(180deg);
+                border-bottom-color: #ff8c00;
+            }
+            100% {
+                transform: rotate(360deg);
+                border-bottom-color: #ffaf46;
+            }
+        }
+
+        .active-animation {
+            opacity: 1;
+        }
+
+        .active-animation .infinity:before {
+            box-shadow: 0 0 25px 5px rgba(91, 194, 255, 0.8), 0 0 40px 10px rgba(91, 194, 255, 0.5), inset 0 0 15px rgba(91, 194, 255, 0.5);
+        }
+
+        .active-animation .infinity:after {
+            box-shadow: 0 0 25px 5px rgba(255, 175, 70, 0.8), 0 0 40px 10px rgba(255, 175, 70, 0.5), inset 0 0 15px rgba(255, 175, 70, 0.5);
+        }
+
+        .glow {
+            position: absolute;
+            width: 300px;
+            height: 150px;
+            background: radial-gradient(
+                ellipse at center,
+                rgba(91, 194, 255, 0.15) 0%,
+                rgba(255, 175, 70, 0.15) 50%,
+                rgba(0, 0, 0, 0) 70%
+            );
+            opacity: 0;
+            transition: opacity 0.5s ease;
+            filter: blur(20px);
+            z-index: 0;
+        }
+
+        .active-animation .glow {
+            opacity: 1;
+        }
+
+        .wave {
+            position: absolute;
+            width: 200px;
+            height: 200px;
+            background: radial-gradient(
+                circle at center,
+                rgba(91, 194, 255, 0.3) 0%,
+                rgba(255, 175, 70, 0.3) 50%,
+                rgba(0, 0, 0, 0) 70%
+            );
+            border-radius: 50%;
+            opacity: 0;
+            z-index: 1;
+            transform: scale(0);
+            filter: blur(10px);
+        }
+
+        .wave-animation {
+            animation: wave 2s infinite;
+        }
+
+        @keyframes wave {
+            0% {
+                transform: scale(0);
+                opacity: 0.5;
+            }
+            100% {
+                transform: scale(2);
+                opacity: 0;
+            }
+        }
+    </style>
+    <script>
+        $(document).ready(function() {
+            // Immediately initialize the animations as inactive
+            $('.infinity-container').removeClass('active-animation');
+            $('.wave').removeClass('wave-animation');
+            
+            $('#start-button').click(function() {
+                // Activate animations immediately when button is clicked
+                $('.infinity-container').addClass('active-animation');
+                $('.wave').addClass('wave-animation');
+                
+                // Show stop button, hide start button
+                $('#start-button').hide();
+                $('#stop-button').show();
+                
+                // Make the AJAX call
+                $.post('/start', function(data) {
+                    $('#status').text('Status: ' + data.status);
+                }).fail(function() {
+                    // In case the AJAX fails, we still want to show status
+                    $('#status').text('Status: Connection error');
+                });
+            });
+            
+            $('#stop-button').click(function() {
+                // Deactivate animations
+                $('.infinity-container').removeClass('active-animation');
+                $('.wave').removeClass('wave-animation');
+                
+                // Show start button, hide stop button
+                $('#stop-button').hide();
+                $('#start-button').show();
+                
+                // Make the AJAX call
+                $.post('/stop', function(data) {
+                    $('#status').text('Status: Stopped');
+                }).fail(function() {
+                    // In case the AJAX fails, we still want to show status
+                    $('#status').text('Status: Stop error');
+                });
+            });
+        });
+    </script>
+</head>
+<body>
+    <h1>Voice Assistant</h1>
+    <div class="wave"></div>
+    <div class="button-container">
+        <button id="start-button" class="control-button">Start</button>
+        <button id="stop-button" class="control-button">Stop</button>
+    </div>
+    <div id="status"></div>
+    <div class="infinity-container">
+        <div class="glow"></div>
+        <div class="infinity"></div>
+    </div>
+</body>
+</html>
