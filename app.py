@@ -6,13 +6,9 @@ from deepgram.utils import verboselogs
 warning_notice = True
 assistant_speaking = False
 
-# Load custom CSS
-with open("style.css") as f:
-    st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
-
 # Streamlit UI
-st.markdown('<div class="title">Deepgram Voice Conversation</div>', unsafe_allow_html=True)
-st.markdown('<div class="instructions">Talk into your microphone to begin the conversation. You can interrupt the assistant at any time by speaking while it\'s talking.</div>', unsafe_allow_html=True)
+st.title("Deepgram Voice Conversation")
+st.write("Talk into your microphone to begin the conversation. You can interrupt the assistant at any time by speaking while it's talking.")
 
 # Placeholder for displaying conversation text
 conversation_placeholder = st.empty()
@@ -67,16 +63,16 @@ def main():
                     content = conversation_text.content
 
                     if role == "user":
-                        conversation_placeholder.markdown(f'<div class="user-message">👤 You: {content}</div>', unsafe_allow_html=True)
+                        conversation_placeholder.write(f"👤 You: {content}")
                     elif role == "assistant":
-                        conversation_placeholder.markdown(f'<div class="assistant-message">🤖 Assistant: {content}</div>', unsafe_allow_html=True)
+                        conversation_placeholder.write(f"🤖 Assistant: {content}")
                     else:
-                        conversation_placeholder.markdown(f'<div>{role}: {content}</div>', unsafe_allow_html=True)
+                        conversation_placeholder.write(f"{role}: {content}")
                 else:
-                    conversation_placeholder.markdown(f'<div>Conversation Text: {conversation_text}</div>', unsafe_allow_html=True)
+                    conversation_placeholder.write(f"Conversation Text: {conversation_text}")
             except Exception as e:
                 st.write(f"Error handling conversation text: {e}")
-                conversation_placeholder.markdown(f'<div>Raw conversation text: {conversation_text}</div>', unsafe_allow_html=True)
+                conversation_placeholder.write(f"Raw conversation text: {conversation_text}")
 
         def on_user_started_speaking(self, user_started_speaking, **kwargs):
             global assistant_speaking
