@@ -1,7 +1,2 @@
-Flask
-pyaudio
-websockets
+deepgram-sdk
 python-dotenv
-requests
-janus
-asyncio
