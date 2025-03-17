@@ -1,277 +1,215 @@
-from flask import Flask, render_template, request, jsonify
-import pyaudio
-import asyncio
-import websockets
-import os
-import json
-import threading
-import janus
-import queue
-import sys
-import requests
-import time
-from dotenv import load_dotenv
-
-app = Flask(__name__)
-
-# Load environment variables from .env file
-load_dotenv()
-
-# Your Deepgram Voice Agent URL
-VOICE_AGENT_URL = "wss://agent.deepgram.com/agent"
-# Groq API endpoint for chat completions
-GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-# Your Agent prompt
-PROMPT = "You are a conversational assistant named Droc from DigiRocket Technologies and you are expert in digital marketing domain. Your response must be limited to 20 words"
-
-# Your Deepgram TTS model
-VOICE = "aura-asteria-en"
-# Your Deepgram STT model
-LISTEN = "nova-2"
-# Mistral 7B model from Groq
-LLM_MODEL = "llama-3.1-8b-instant"
-
-# Get API keys from .env file
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-DEEPGRAM_API_KEY = os.getenv("DEEPGRAM_API_KEY")
-
-USER_AUDIO_SAMPLE_RATE = 16000
-USER_AUDIO_SECS_PER_CHUNK = 0.05
-USER_AUDIO_SAMPLES_PER_CHUNK = round(USER_AUDIO_SAMPLE_RATE * USER_AUDIO_SECS_PER_CHUNK)
-
-AGENT_AUDIO_SAMPLE_RATE = 16000
-AGENT_AUDIO_BYTES_PER_SEC = 2 * AGENT_AUDIO_SAMPLE_RATE
-
-SETTINGS = {
-    "type": "SettingsConfiguration",
-    "audio": {
-        "input": {
-            "encoding": "linear16",
-            "sample_rate": USER_AUDIO_SAMPLE_RATE,
-        },
-        "output": {
-            "encoding": "linear16",
-            "sample_rate": AGENT_AUDIO_SAMPLE_RATE,
-            "container": "none",
-        },
-    },
-    "agent": {
-        "listen": {
-            "model": LISTEN
-        },
-        "think": {
-            "provider": {
-              "type": "custom",
-              "url": GROQ_URL,
-              "headers": [
-                {
-                  "key": "Authorization",
-                  "value": f"Bearer {GROQ_API_KEY}"
-                }
-              ]
+from deepgram.utils import verboselogs
+ 
+from deepgram import (
+    DeepgramClient,
+    DeepgramClientOptions,
+    AgentWebSocketEvents,
+    SettingsConfigurationOptions,
+)
+ 
+def main():
+    # Global variables to control state
+    global warning_notice, assistant_speaking
+    warning_notice = True
+    assistant_speaking = False
+   
+    try:
+        # Client configuration with echo cancellation and barge-in enabled
+        config: DeepgramClientOptions = DeepgramClientOptions(
+            options={
+                "keepalive": "true",
+                "microphone_record": "true",
+                "speaker_playback": "true",
+                "speaker_channels": "2",               # Stereo audio output
+                "echo_cancellation": "true",           # Enable echo cancellation
+                "noise_suppression": "true",           # Enable noise suppression
+                "auto_gain_control": "true",           # Enable automatic gain control
+                "vad_level": "2",                      # Voice activity detection sensitivity (0-3)
+                "barge_in_enabled": "true",            # Enable interruptions/barge-in
+                "microphone_always_on": "true",        # Keep microphone on even when assistant is speaking
             },
-            "model": LLM_MODEL,
-            "instructions": PROMPT,
-        },
-        "speak": {
-            "model": VOICE
-        },
-    },
-    "context": {
-        "messages": [], # LLM message history (e.g. to restore existing conversation if websocket connection breaks)
-        "replay": False # whether to replay the last message, if it is an assistant message
-    }
-}
-
-# Echo Cancellation implementation from the first code
-class EchoCancellation:
-    def __init__(self):
-        self.is_speaking = False
-        self.buffer_duration = 10.0  # Buffer duration in seconds after TTS stops
-        self.lock = threading.Lock()
-        self.speaking_until = 0
-
-    def mark_speaking_started(self):
-        with self.lock:
-            self.is_speaking = True
-
-    def mark_speaking_ended(self):
-        with self.lock:
-            # Keep is_speaking True for buffer_duration seconds to account for audio delay
-            self.speaking_until = time.time() + self.buffer_duration
-            threading.Timer(self.buffer_duration, self._reset_speaking).start()
-
-    def _reset_speaking(self):
-        with self.lock:
-            if time.time() >= self.speaking_until:
-                self.is_speaking = False
-
-    def should_process_audio(self):
-        with self.lock:
-            return not self.is_speaking
-
-# Create a global echo_cancellation instance
-echo_cancellation = EchoCancellation()
-
-# Modified microphone queue with echo cancellation filtering
-mic_audio_queue = asyncio.Queue()
-
-# Global flag to stop the conversation
-stop_flag = threading.Event()
-
-def callback(input_data, frame_count, time_info, status_flag):
-    # Only add audio to the queue if we're not currently speaking
-    if echo_cancellation.should_process_audio():
-        mic_audio_queue.put_nowait(input_data)
-    return (input_data, pyaudio.paContinue)
-
-async def run():
-    if not DEEPGRAM_API_KEY:
-        print("DEEPGRAM_API_KEY not found in .env file")
-        return
-
-    if not GROQ_API_KEY:
-        print("GROQ_API_KEY not found in .env file")
-        return
-
-    async with websockets.connect(
-        VOICE_AGENT_URL,
-        additional_headers={"Authorization": f"Token {DEEPGRAM_API_KEY}"},
-    ) as ws:
-
-        async def microphone():
-            audio = pyaudio.PyAudio()
-            stream = audio.open(
-                format=pyaudio.paInt16,
-                rate=USER_AUDIO_SAMPLE_RATE,
-                input=True,
-                frames_per_buffer=USER_AUDIO_SAMPLES_PER_CHUNK,
-                stream_callback=callback,
-                channels=1
-            )
-
-            stream.start_stream()
-
-            while stream.is_active() and not stop_flag.is_set():
-                await asyncio.sleep(0.1)
-
-            stream.stop_stream()
-            stream.close()
-
-        async def sender(ws):
-            await ws.send(json.dumps(SETTINGS))
-
+            # verbose=verboselogs.DEBUG,               # Uncomment for debugging
+        )
+       
+        # Create Deepgram client with your API key
+        deepgram: DeepgramClient = DeepgramClient("14164fef1f66a406e3fdd80b27a7c74d9a14187b", config)
+ 
+        # Create a websocket connection to Deepgram
+        dg_connection = deepgram.agent.websocket.v("1")
+ 
+        # Event handlers
+        def on_open(self, open, **kwargs):
+            print(f"\n\n{open}\n\n")
+            print("Connection established. Speak to begin conversation...")
+ 
+        def on_binary_data(self, data, **kwargs):
+            global warning_notice
+            if warning_notice:
+                print("Received binary audio data")
+                warning_notice = False
+ 
+        def on_welcome(self, welcome, **kwargs):
+            print(f"\n\n{welcome}\n\n")
+ 
+        def on_settings_applied(self, settings_applied, **kwargs):
+            print(f"\n\n{settings_applied}\n\n")
+            print("Settings successfully applied. Ready for conversation.")
+            # Print special note about interruption feature
+            print("👉 You can interrupt the assistant at any time by speaking while it's talking.")
+ 
+        def on_conversation_text(self, conversation_text, **kwargs):
             try:
-                while not stop_flag.is_set():
-                    data = await mic_audio_queue.get()
-                    await ws.send(data)
-
+                # Access attributes directly instead of using .get()
+                if hasattr(conversation_text, 'role') and hasattr(conversation_text, 'content'):
+                    role = conversation_text.role
+                    content = conversation_text.content
+                   
+                    if role == "user":
+                        print(f"\n👤 You: {content}\n")
+                    elif role == "assistant":
+                        print(f"\n🤖 Assistant: {content}\n")
+                    else:
+                        print(f"\n\n{role}: {content}\n\n")
+                else:
+                    # Fallback to printing the whole object
+                    print(f"\n\nConversation Text: {conversation_text}\n\n")
             except Exception as e:
-                print("Error while sending: " + str(e))
-                raise
-
-        async def receiver(ws):
-            try:
-                speaker = Speaker()
-                with speaker:
-                    async for message in ws:
-                        if stop_flag.is_set():
-                            break
-                        if type(message) is str:
-                            message_data = json.loads(message)
-                            print(message)
-
-                            if message_data["type"] == "UserStartedSpeaking":
-                                speaker.stop()
-                            # Add support for tracking agent's speaking state
-                            elif message_data["type"] == "AgentStartedSpeaking":
-                                echo_cancellation.mark_speaking_started()
-                            elif message_data["type"] == "AgentFinishedSpeaking":
-                                echo_cancellation.mark_speaking_ended()
-
-                        elif type(message) is bytes:
-                            await speaker.play(message)
-
-            except Exception as e:
-                print(e)
-
-        await asyncio.wait(
-            [
-                asyncio.ensure_future(microphone()),
-                asyncio.ensure_future(sender(ws)),
-                asyncio.ensure_future(receiver(ws)),
-            ]
-        )
-
-def _play(audio_out, stream, stop):
-    while not stop.is_set():
-        try:
-            data = audio_out.sync_q.get(True, 0.05)
-            stream.write(data)
-        except queue.Empty:
-            pass
-
-class Speaker:
-    def __init__(self):
-        self._queue = None
-        self._stream = None
-        self._thread = None
-        self._stop = None
-
-    def __enter__(self):
-        audio = pyaudio.PyAudio()
-        self._stream = audio.open(
-            format=pyaudio.paInt16,
-            channels=1,
-            rate=AGENT_AUDIO_SAMPLE_RATE,
-            input=False,
-            output=True,
-        )
-        self._queue = janus.Queue()
-        self._stop = threading.Event()
-        self._thread = threading.Thread(
-            target=_play, args=(self._queue, self._stream, self._stop), daemon=True
-        )
-        self._thread.start()
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        self._stop.set()
-        self._thread.join()
-        self._stream.close()
-        self._stream = None
-        self._queue = None
-        self._thread = None
-        self._stop = None
-
-    async def play(self, data):
-        # Mark that the agent is speaking when audio is being played
-        echo_cancellation.mark_speaking_started()
-        return await self._queue.async_q.put(data)
-
-    def stop(self):
-        # Mark that the agent has finished speaking when stopping audio output
-        echo_cancellation.mark_speaking_ended()
-        if self._queue and self._queue.async_q:
-            while not self._queue.async_q.empty():
-                try:
-                    self._queue.async_q.get_nowait()
-                except janus.QueueEmpty:
-                    break
-
-@app.route('/')
-def index():
-    return render_template('index.html')
-
-@app.route('/start', methods=['POST'])
-def start():
-    stop_flag.clear()
-    asyncio.run(run())
-    return jsonify({"status": "started"})
-
-@app.route('/stop', methods=['POST'])
-def stop():
-    stop_flag.set()
-    return jsonify({"status": "stopped"})
-
-if __name__ == '__main__':
-    app.run(debug=True)
+                print(f"Error handling conversation text: {e}")
+                # Fallback to just printing the object as-is
+                print(f"Raw conversation text: {conversation_text}")
+ 
+        def on_user_started_speaking(self, user_started_speaking, **kwargs):
+            global assistant_speaking
+           
+            if assistant_speaking:
+                # User interrupted the assistant
+                print("\n✋ You interrupted the assistant...\n")
+                # Signal to stop the assistant's speech
+                dg_connection.interrupt()
+                assistant_speaking = False
+            else:
+                # Normal listening mode
+                print("\n🎤 Listening...\n")
+ 
+        def on_agent_thinking(self, agent_thinking, **kwargs):
+            print("\n💭 Assistant is thinking...\n")
+ 
+        def on_function_calling(self, function_calling, **kwargs):
+            print(f"\n\n{function_calling}\n\n")
+ 
+        def on_agent_started_speaking(self, agent_started_speaking, **kwargs):
+            global assistant_speaking
+            assistant_speaking = True
+            print("\n🔊 Assistant is speaking...\n")
+ 
+        def on_agent_audio_done(self, agent_audio_done, **kwargs):
+            global assistant_speaking
+            assistant_speaking = False
+            print("\n✅ Assistant finished speaking.\n")
+ 
+        def on_close(self, close, **kwargs):
+            print(f"\n\n{close}\n\n")
+            print("Connection closed.")
+ 
+        def on_error(self, error, **kwargs):
+            print(f"\n❌ Error: {error}\n\n")
+ 
+        # Handle interruption events
+        def on_interruption(self, interruption, **kwargs):
+            print("\n⚡ Assistant was interrupted!\n")
+ 
+        # Handle the EndOfThought message that appears frequently
+        def on_end_of_thought(self, end_of_thought, **kwargs):
+            print("\n💡 Assistant finished thinking and is preparing response...\n")
+ 
+        def on_unhandled(self, unhandled, **kwargs):
+            # If we still get unhandled messages, print them in a nicer format
+            if hasattr(unhandled, 'raw') and isinstance(unhandled.raw, str) and "EndOfThought" in unhandled.raw:
+                print("\n💡 Assistant finished thinking and is preparing response...\n")
+            elif isinstance(unhandled, dict) and "raw" in unhandled and "EndOfThought" in unhandled["raw"]:
+                print("\n💡 Assistant finished thinking and is preparing response...\n")
+            elif hasattr(unhandled, 'raw') and isinstance(unhandled.raw, str) and "Interruption" in unhandled.raw:
+                print("\n⚡ Assistant was interrupted!\n")
+            elif isinstance(unhandled, dict) and "raw" in unhandled and "Interruption" in unhandled["raw"]:
+                print("\n⚡ Assistant was interrupted!\n")
+            else:
+                print(f"\nUnknown event: {unhandled}\n")
+ 
+        # Register event handlers
+        dg_connection.on(AgentWebSocketEvents.Open, on_open)
+        dg_connection.on(AgentWebSocketEvents.AudioData, on_binary_data)
+        dg_connection.on(AgentWebSocketEvents.Welcome, on_welcome)
+        dg_connection.on(AgentWebSocketEvents.SettingsApplied, on_settings_applied)
+        dg_connection.on(AgentWebSocketEvents.ConversationText, on_conversation_text)
+        dg_connection.on(AgentWebSocketEvents.UserStartedSpeaking, on_user_started_speaking)
+        dg_connection.on(AgentWebSocketEvents.AgentThinking, on_agent_thinking)
+        dg_connection.on(AgentWebSocketEvents.FunctionCalling, on_function_calling)
+        dg_connection.on(AgentWebSocketEvents.AgentStartedSpeaking, on_agent_started_speaking)
+        dg_connection.on(AgentWebSocketEvents.AgentAudioDone, on_agent_audio_done)
+        dg_connection.on(AgentWebSocketEvents.Close, on_close)
+        dg_connection.on(AgentWebSocketEvents.Error, on_error)
+        dg_connection.on(AgentWebSocketEvents.Unhandled, on_unhandled)
+       
+        # Try to register specific handlers for special events
+        if hasattr(AgentWebSocketEvents, 'EndOfThought'):
+            dg_connection.on(AgentWebSocketEvents.EndOfThought, on_end_of_thought)
+        else:
+            # If not in the enum, try to register it as a string
+            dg_connection.on("EndOfThought", on_end_of_thought)
+           
+        # Register interruption event handler if available
+        if hasattr(AgentWebSocketEvents, 'Interruption'):
+            dg_connection.on(AgentWebSocketEvents.Interruption, on_interruption)
+        else:
+            # If not in the enum, try to register it as a string
+            dg_connection.on("Interruption", on_interruption)
+ 
+        # Configure settings for the conversation
+        options: SettingsConfigurationOptions = SettingsConfigurationOptions()
+       
+        # Configure the AI model and behavior
+        options.agent.think.provider.type = "open_ai"
+        options.agent.think.model = "gpt-4o-mini"
+        options.agent.think.instructions = """
+        You are a sales executive at DigiRocket Technologies, specializing in website optimization and digital marketing. You aim to collect the customer’s email by offering a free website audit report and scheduling a consultation. The conversation should not end until the user provides their email or explicitly refuses multiple times. Answers should not be more than 20 words. Use more filler words in between the conversation to make the conversation more realistic and natural, and have context awareness. And remember to get the customer email id. Take the location and time zone of Dover, United States.
+        """
+       
+        # Configure speech settings
+        options.agent.speak.voice = "nova"  # You can choose different voices: nova, shimmer, etc.
+        options.agent.speak.rate = 1.0      # Normal speaking rate
+       
+        # Configure barge-in settings
+        options.agent.barge_in = True
+       
+        # Configure transcription settings for better accuracy
+        options.transcription = {
+            "model": "nova-2",
+            "smart_format": True,
+            "diarize": True,
+            "language": "en",  # Change this for other languages
+            "punctuate": True,
+        }
+ 
+        # Start the connection
+        if dg_connection.start(options) is False:
+            print("Failed to start connection")
+            return
+ 
+        print("\n\n==== Deepgram Voice Conversation Started ====")
+        print("Talk into your microphone to begin conversation")
+        print("You can interrupt the assistant at any time by speaking while it's talking")
+        print("Press Enter to stop...\n\n")
+        input()
+ 
+        # Close the connection
+        dg_connection.finish()
+ 
+        print("Session finished. Thank you for using Deepgram Voice Conversation!")
+ 
+    except ValueError as e:
+        print(f"Invalid value encountered: {e}")
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+ 
+if __name__ == "__main__":
+    main()
